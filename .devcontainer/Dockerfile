@@ -44,3 +44,4 @@ RUN groupadd --gid ${USER_GID} ${USERNAME} \
 
 # 必要に応じてソースをコピー (docker-compose で volume マウントする場合は必須ではない)
 # COPY ./src/ /usr/src/app/
+# COPY ./.env /usr/src/app/

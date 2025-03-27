@@ -115,7 +115,7 @@ pt.align['Rainfall']='l'
 pt.align['Wind']='l'
 
 print(announce_datetime_str)
-text_slacks_ar=[f'天気予報:{announce_datetime_str} <{url} | tenki.jp >']
+text_slacks_ar=[f'天気予報: {announce_datetime_str} <{url} | tenki.jp >']
 for kvs in kvss:
     if kvs["日付"][0] != '今日':
         continue
@@ -152,9 +152,12 @@ for kvs in kvss:
         elif we=='雪': #たぶんない
             # we_slack=':snowman:'
             we_slack='⛄'
-        elif we=='雹': #？事前に予想されることある？？？？
-            # we_slack=':snowman:'
-            we_slack='⛄'
+        # elif we=='霰': #あられ？事前に予想されることある？？？？
+        #     # we_slack=':snowman:'
+        #     we_slack='⛄'
+        # elif we=='雹': #ひょう？事前に予想されることある？？？？
+        #     # we_slack=':snowman:'
+        #     we_slack='⛄'
         else:
             we_slack=we
         atmp=kvs["気温(℃)"][_i]
