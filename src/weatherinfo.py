@@ -135,11 +135,16 @@ def format_fcst(select_data:any) -> List[str]:
     return texts
 
 def format_vpfd(select_data:any) -> List[str]:
+    print('------')
+    print('------')
+    pprint(select_data)
+    print('------')
+    print('------')
     texts: List[str] = []
 
-    temperature_num_digits=max([len(f'{_x['temperature']:d}') for _x in select_data.values()])
-    wind_speed_num_digits=max([len(f'{_x['wind']['speed']:d}') for _x in select_data.values()])
-    wind_direction_num_digits=max([len(_x['wind']['direction']) for _x in select_data.values()])
+    temperature_num_digits=max([len(f'{_x.get('temperature',0):d}') for _x in select_data.values()])
+    wind_speed_num_digits=max([len(f'{_x.get('wind',{}).get('speed',0):d}') for _x in select_data.values()])
+    wind_direction_num_digits=max([len(_x.get('wind',{}).get('direction','')) for _x in select_data.values()])
 
     last_d: int = None
     last_pop: str = None
@@ -159,13 +164,11 @@ def format_vpfd(select_data:any) -> List[str]:
             # pop_slack: str = f'{SP*4}'
         else:
             pop_slack: str = f'{SP*4}'
-        temperature_minmax_raw: str = select_data[dt_raw].get('temperature_minmax')
-        if temperature_minmax_raw is not None:
-            temperature_minmax_slack: str = f'{temperature_minmax_raw:{SP}>3}°C'
-        else:
-            temperature_minmax_slack: str = f'{SP*6}'
-        weather_raw=select_data[dt_raw]['weather']
+        weather_raw=select_data[dt_raw].get('weather')
         match weather_raw:
+            case None:
+                continue
+                # 天気がないなら何も出さない(行を無視)。0時のtemperature_minmaxのデータのキーに起因して発生。
             case '晴れ':
                 if 6 <= dt.hour < 18:
                     weather_icon_slack=icon_sunny_day
@@ -179,10 +182,13 @@ def format_vpfd(select_data:any) -> List[str]:
                 weather_icon_slack=icon_snowy
             case '雨または雪': #民間予報ではみぞれ https://www.jma.go.jp/jma/kishou/know/yougo_hp/kousui.html によると予報文では「雨か雪」「雪か雨」と表現するが地域時系列予報では「雨または雪」固定
                 weather_icon_slack=icon_sleety
-            case _:
-                weather_icon_slack=weather_raw
-        temperature_minmax_raw=select_data[dt_raw]['temperature']
-        temperature_slack=f'{temperature_minmax_raw:{SP}>{temperature_num_digits}}°C'
+        temperature_minmax_raw: str = select_data[dt_raw].get('temperature_minmax')
+        if temperature_minmax_raw is not None:
+            temperature_minmax_slack: str = f'{temperature_minmax_raw:{SP}>3}°C'
+        else:
+            temperature_minmax_slack: str = f'{SP*6}'
+        temperature_raw=select_data[dt_raw]['temperature']
+        temperature_slack=f'{temperature_raw:{SP}>{temperature_num_digits}}°C'
         wind_raw=select_data[dt_raw]['wind']
         wind_direction_sp=wind_direction_num_digits-len(wind_raw["direction"])
         wind_slack=f'{SP*wind_direction_sp}{wind_raw["direction"]}{SP*wind_direction_sp}{SP}{wind_raw["speed"]:{wind_speed_num_digits}.0f}m'# TODO 方角なしあるのかな(無風)→来た情報無加工で入れてるだけなので無問題 ＃TODO 北 10mと 北西 1mがあったときに無駄にSP*2となる問題(10m超えはレアなので放置)
