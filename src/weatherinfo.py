@@ -10,6 +10,8 @@ import datetime
 import dotenv
 import slack_sdk
 
+_DEBUG_ADDRESS_=False
+
 # SP=chr(0x2002) # 1/2em幅のスペース
 SP=chr(0x2007) # 固定幅フォントの数字と同じ幅のスペース
 SP_ZEN=chr(0x3000) # 「全角」のスペース
@@ -21,68 +23,162 @@ def load_json(url:str)->any:
     print(url)
     json_raw = resp.text
     json_obj = json.loads(json_raw)
-    pprint(json_obj)
+    # pprint(json_obj)
     return json_obj
 
 def parse_dt_str(dt_str:str)->datetime.datetime:
     return datetime.datetime.fromisoformat(dt_str)
 
-def send_slack(title:str, message:str)->None:
+def prepare_slack():
+    global slack_cli
     global slack_bot_user_id
     global slack_ch_id
-    title_slack=f'*{title}*\n'
-    message_slack=f'{title_slack}{message}'
-    try:
-        if slack_bot_user_id is None:
-            resp_a = slack_cli.auth_test()
-            slack_bot_user_id = resp_a["user_id"]
-        print(f'BotのユーザーID: {slack_bot_user_id}')
+    if slack_cli is None:
+        slack_cli = slack_sdk.WebClient(token=slack_token)
+    if slack_bot_user_id is None:
+        resp_a = slack_cli.auth_test()
+        slack_bot_user_id = resp_a["user_id"]
+    print(f'BotのユーザーID: {slack_bot_user_id}')
 
-        if slack_ch_id is None:
-            resp_C=slack_cli.conversations_list()
-            for channel in resp_C["channels"]:
-                if f'#{channel["name"]}'==slack_ch_nm:
-                    slack_ch_id = channel['id']
-                    break
-            else:
-                raise ValueError('チャンネルIDを特定できない')
-        print(f'チャンネルID: {slack_ch_id}')
+    if slack_ch_id is None:
+        resp_C=slack_cli.conversations_list()
+        for channel in resp_C["channels"]:
+            if f'#{channel["name"]}'==slack_ch_nm:
+                slack_ch_id = channel['id']
+                break
+        else:
+            raise ValueError('チャンネルIDを特定できない')
+    print(f'チャンネルID: {slack_ch_id}')
 
-        resp_p = slack_cli.chat_postMessage(
-            channel=slack_ch_id,
-            text=message_slack
-        )
-        post_ts=resp_p["ts"]
-        print(f'送信成功: {post_ts}')
-        resp_h = slack_cli.conversations_history(
-            channel=slack_ch_id,
-            limit=10  # 最新10件
-        )
-        past_messages = resp_h["messages"]
+def send_slack_text(message: str) -> float:
+    resp_p = slack_cli.chat_postMessage(
+        channel=slack_ch_id,
+        text=message
+    )
+    post_ts=resp_p["ts"]
+    print(f'送信成功: {post_ts}')
+    return post_ts
 
-        for past_msg in past_messages:
-            # pprint(msg)
-            past_text = past_msg.get("text", "")
-            past_user = past_msg.get("user", "system/unknown")
-            past_ts = past_msg.get("ts")
-            # print(f"{i}. ユーザー: {user}, 時間: {ts}, メッセージ: {text}")
-            if past_ts >= post_ts:
-                continue
-            if past_user != slack_bot_user_id:
-                continue
-            if not past_text.startswith(title_slack):
-                continue
-            resp_d = slack_cli.chat_delete(
-                channel=slack_ch_id,
-                ts=past_ts
+def send_slack_images(
+        files:List[bytes] = None,
+        file_names:List[str] = None,
+        file_mimetypes:List[str] = None,
+        file_titles:List[str] = None,
+        file_alts:List[str] = None,
+        message: str = None, 
+    ) -> str:
+        slack_up_files:List[any]=list()
+        for i, file in enumerate(files):
+            slack_get_up_params={
+                'filename': upload_fname,
+                'length': len(bytes_img_up),
+            }
+            if file_names is not None:
+                slack_get_up_params['filename'] = file_names[i]
+            if file_alts is not None:
+                slack_get_up_params['alt_text'] = file_alts[i]
+
+            resp_up_info = slack_cli.files_getUploadURLExternal(**slack_get_up_params)
+            print(resp_up_info)
+            print(f'{resp_up_info.status_code} {resp_up_info["ok"]}')
+            print(resp_up_info['upload_url'], resp_up_info['file_id'])
+            slack_up_files.append({'id':resp_up_info['file_id']})
+            if file_titles is not None:
+                slack_up_files[i]['title'] = file_titles[i]
+            slack_post_headers={
+                'Content-Length': str(len(file)),
+            }
+            if file_mimetypes is not None:
+                slack_post_headers['Content-Type'] = file_mimetypes[i]
+            resp_put = requests.post(
+                resp_up_info['upload_url'],
+                headers = slack_post_headers,
+                data = file,
             )
-            if resp_d["ok"]:
-                print(f'メッセージ削除成功: {past_ts}')
-            else:
-                print(f'メッセージ削除失敗??: {past_ts}')
+            print(resp_put)
+            print(f'{resp_put.status_code} {resp_put.reason}')
+            resp_put.raise_for_status()
+
+        print(f'to chhannel {slack_ch_id}')
+        resp_compl = slack_cli.files_completeUploadExternal(
+            files = slack_up_files,
+            channel_id = slack_ch_id,
+            initial_comment = message
+        )
+        print(resp_compl)
+        return slack_up_files[-1]['id']
+
+def delete_slack_same_titles(title: str, post_ts: float, post_file_id: str, check_limit:int = 10):
+    if title is None:
+        return
+    title_slack=f'*{title}*'
+    resp_h = slack_cli.conversations_history(
+        channel=slack_ch_id,
+        limit=check_limit, # 直近N件以内に同じタイトルがあれば削除
+    ) #TODO post_tsがあるばあい、それをlatestとして指定する
+    past_messages = resp_h["messages"]
+
+    for past_msg in past_messages:
+        print(past_msg)
+        past_text = past_msg.get("text", "")
+        past_user = past_msg.get("user", "system/unknown")
+        past_ts = past_msg.get("ts")
+        # print(f"{i}. ユーザー: {user}, 時間: {ts}, メッセージ: {text}")
+
+        #消さない条件
+        if past_user != slack_bot_user_id: #ユーザーが異なる
+            continue
+        if not past_text.startswith(title_slack): #1行目(タイトル)が異なる
+            continue
+        if post_ts is not None and past_ts >= post_ts: #tsが指定されていて、それと同じか新しい
+            continue
+        if post_file_id is not None and post_file_id in [f['id'] for f in past_msg.get('files',[])]: #filesが指定されていて、それが含まれる
+            continue
+        #ここに到達したら削除対象
+        #ユーザーが同一
+        #一行目(タイトル)が一致
+        #TSがあった場合、それより古い
+        #FILESがあった場合、含まない
+
+
+        resp_d = slack_cli.chat_delete(
+            channel=slack_ch_id,
+            ts=past_ts
+        )
+        if resp_d["ok"]:
+            print(f'メッセージ削除成功: {past_ts}')
+        else:
+            print(f'メッセージ削除失敗??: {past_ts}')
+
+
+def send_slack(
+        message:str,
+        title:str = None,
+        files:List[bytes] = None,
+        file_names:List[str] = None,
+        file_mimetypes:List[str] = None,
+        file_titles:List[str] = None,
+        file_alts:List[str] = None,
+        remove_same_title: bool = False,
+    )->None:
+    prepare_slack()
+    if title is not None:
+        message_slack=f'*{title}*\n{message}'
+    else:
+        message_slack=f'{message}'
+    try:
+        if files is None:
+            post_ts = send_slack_text(message_slack)
+            file_id = None
+        else:
+            file_id = send_slack_images(files, file_names, file_mimetypes, file_titles, file_alts, message_slack)
+            post_ts = None
+        if remove_same_title and title is not None:
+            delete_slack_same_titles(title, post_ts, file_id)
 
     except slack_sdk.SlackApiError as e:
         print("APIエラー:", e.response["error"])
+        raise e
 
 def select_fcst_00_weather(raw_data: any, select_data: any, area_index: int) -> None:
     area_raw_data = raw_data['areas'][area_index]
@@ -135,11 +231,6 @@ def format_fcst(select_data:any) -> List[str]:
     return texts
 
 def format_vpfd(select_data:any) -> List[str]:
-    print('------')
-    print('------')
-    pprint(select_data)
-    print('------')
-    print('------')
     texts: List[str] = []
 
     temperature_num_digits=max([len(f'{_x.get('temperature',0):d}') for _x in select_data.values()])
@@ -237,19 +328,19 @@ def proc_main(fcst_json:any, vpfd_json:any)->str:
 
     fcst_texts= format_fcst(fcst_select_data)
     fcst_slack= '\n'.join(fcst_texts)
-    # send_slack('天気予報:', fcst_slack)
+    # send_slack(fcst_slack, title='天気予報:', remove_same_title=True)
 
     vpfd_texts = [f'{vpfd_area_nm_slack}{SP}-{SP}{vpfd_announce_dt_slack}']
     vpfd_texts.extend(format_vpfd(vpfd_select_data))
     vpfd_texts.append(f'from <{vpfd_link_url} | {vpfd_link_text} >')
     vpfd_slack = '\n'.join(vpfd_texts)
-    send_slack('時系列天気:', vpfd_slack)
+    send_slack(vpfd_slack, title='時系列天気:', remove_same_title=True)
 
 dotenv.load_dotenv()
 
 slack_token = os.environ['SLACK_TOKEN']
 slack_ch_nm = os.environ['SLACK_CH_NM']
-slack_cli = slack_sdk.WebClient(token=slack_token)
+slack_cli = None
 slack_bot_user_id = None
 slack_ch_id = None
 
@@ -267,20 +358,180 @@ icon_rainy = os.environ['ICON_RAINY']
 icon_snowy = os.environ['ICON_SNOWY']
 icon_sleety = os.environ['ICON_SLEETY']
 
-area_json = load_json(area_url)
 
-area_class10_json = area_json['class10s'][area_class10_cd]
-area_class10_nm = area_class10_json['name']
-area_office_cd = area_class10_json['parent']
-area_office_json = area_json['offices'][area_office_cd]
-area_office_nm= area_office_json['name']
+nowc_rain_zoom=int(os.environ['NOWCAST_RAIN_ZOOM'])
+nowc_rain_tile_x=int(os.environ['NOWCAST_RAIN_TILE_X'])
+nowc_rain_tile_y=int(os.environ['NOWCAST_RAIN_TILE_Y'])
+nowc_rain_pixel_x=int(os.environ['NOWCAST_RAIN_PIXEL_X'])
+nowc_rain_pixel_y=int(os.environ['NOWCAST_RAIN_PIXEL_Y'])
+nowc_rain_radar_range=int(os.environ['NOWCAST_RAIN_RADAR_RANGE'])
+nowc_rain_coming_range=int(os.environ['NOWCAST_RAIN_COMING_RANGE'])
+nowc_rain_detect_range=int(os.environ['NOWCAST_RAIN_DETECT_RANGE'])
 
-fcst_url = fcst_url_format.format(area_office_cd=area_office_cd)
-fcst_json = load_json(fcst_url)
+if nowc_rain_zoom>14:
+    raise ValueError('Zoomレベルは4から14の間で指定してください')
+if nowc_rain_zoom>=10:
+    zoom_f=10
+elif nowc_rain_zoom>=8:
+    zoom_f=8
+elif nowc_rain_zoom>=6:
+    zoom_f=6
+elif nowc_rain_zoom>=4:
+    zoom_f=4
+else :
+    raise ValueError('Zoomレベルは4から14の間で指定してください')
+zoom_f_diff = nowc_rain_zoom - zoom_f
 
-vpfd_url = vpfd_url_format.format(area_class10_cd=area_class10_cd)
-vpfd_json = load_json(vpfd_url)
 
-proc_main(fcst_json, vpfd_json)
+# area_json = load_json(area_url)
+
+# area_class10_json = area_json['class10s'][area_class10_cd]
+# area_class10_nm = area_class10_json['name']
+# area_office_cd = area_class10_json['parent']
+# area_office_json = area_json['offices'][area_office_cd]
+# area_office_nm= area_office_json['name']
+
+# fcst_url = fcst_url_format.format(area_office_cd=area_office_cd)
+# fcst_json = load_json(fcst_url)
+
+# vpfd_url = vpfd_url_format.format(area_class10_cd=area_class10_cd)
+# vpfd_json = load_json(vpfd_url)
+
+# proc_main(fcst_json, vpfd_json)
 
 
+from PIL import Image, ImageDraw, ImageFont
+from io import BytesIO
+import math
+
+out_img_size_x=nowc_rain_radar_range*2
+out_img_size_y=nowc_rain_radar_range*2
+
+pxl_x_min_raw=nowc_rain_pixel_x-nowc_rain_radar_range
+pxl_x_max_raw=nowc_rain_pixel_x+nowc_rain_radar_range
+pxl_y_min_raw=nowc_rain_pixel_y-nowc_rain_radar_range
+pxl_y_max_raw=nowc_rain_pixel_y+nowc_rain_radar_range
+
+print(pxl_x_min_raw,pxl_y_min_raw,)
+print(pxl_x_max_raw,pxl_x_max_raw,)
+
+
+nowc_json = load_json('https://www.jma.go.jp/bosai/jmatile/data/nowc/targetTimes_N1.json')
+nowc_basetime = max(
+    nowc_json, 
+    key=lambda x: int(x['basetime'])
+)['basetime']
+nowc_validtime = max(
+    filter(lambda x: x['basetime']==nowc_basetime, nowc_json)
+)['validtime']
+
+def load_image_url(url):
+    print(url)
+    resp_img = requests.get(url)
+    print(f'{resp_img.status_code} {resp_img.reason}')
+    resp_img.raise_for_status()
+    return Image.open(BytesIO(resp_img.content))
+
+def load_base_image_one(lvl: int, tilex: int, tiley: int) -> Image:
+    url=f'https://www.jma.go.jp/tile/gsi/pale/{lvl}/{tilex}/{tiley}.png'
+    return load_image_url(url)
+
+def load_rain_image_one(lvl: int, tilex: int, tiley: int, basetime: str, validtime: str) -> Image:
+    url=f'https://www.jma.go.jp/bosai/jmatile/data/nowc/{basetime}/none/{validtime}/surf/hrpns/{lvl}/{tilex}/{tiley}.png'
+    return load_image_url(url)
+
+img_center=load_base_image_one(nowc_rain_zoom,nowc_rain_tile_x,nowc_rain_tile_y)
+# img_center=load_rain_image_one(nowc_rain_zoom,nowc_rain_tile_x,nowc_rain_tile_y,'20250331092000', '20250331092000')
+img_w=img_center.width
+img_h=img_center.height
+
+tile_x_min = math.trunc(math.floor(pxl_x_min_raw/img_w)) + nowc_rain_tile_x
+tile_x_max = math.trunc(math.floor(pxl_x_max_raw/img_w)) + nowc_rain_tile_x
+tile_y_min = math.trunc(math.floor(pxl_y_min_raw/img_h)) + nowc_rain_tile_y
+tile_y_max = math.trunc(math.floor(pxl_y_max_raw/img_h)) + nowc_rain_tile_y
+
+in_img_w=img_w*(tile_x_max-tile_x_min+1)
+in_img_h=img_h*(tile_y_max-tile_y_min+1)
+img_join: Image = Image.new('RGBA', (in_img_w, in_img_h))
+for y in range(tile_y_min, tile_y_max+1): 
+    for x in range(tile_x_min, tile_x_max+1):
+        if x==nowc_rain_tile_x and y==nowc_rain_tile_y:
+            img_load=img_center
+        else:
+            img_load=load_base_image_one(nowc_rain_zoom,x,y)
+        if _DEBUG_ADDRESS_:
+            draw=ImageDraw.Draw(img_load)
+            draw.rectangle([(0,0),(img_load.width-1,img_load.height-1)],outline='black',width=1)
+            draw.text((10,10), f'x={x}, y={y}',fill='black')
+            if x==nowc_rain_tile_x and y==nowc_rain_tile_y:
+                draw.line((0,0,img_load.width-1,img_load.height-1), fill='black', width=1)
+                draw.line((0,img_load.width-1,img_load.height-1,0), fill='black', width=1)
+        px=(x-tile_x_min)*img_w
+        py=(y-tile_y_min)*img_h
+        img_join.paste(img_load.convert('RGBA'),(px,py))
+crop_x_min=pxl_x_min_raw-(img_w*(tile_x_min - nowc_rain_tile_x))
+crop_x_max=pxl_x_max_raw-(img_w*(tile_x_min - nowc_rain_tile_x))
+crop_y_min=pxl_y_min_raw-(img_h*(tile_y_min - nowc_rain_tile_y))
+crop_y_max=pxl_y_max_raw-(img_h*(tile_y_min - nowc_rain_tile_y))
+if _DEBUG_ADDRESS_:
+    draw=ImageDraw.Draw(img_join)
+    draw.rectangle([(crop_x_min,crop_y_min),(crop_x_max-1,crop_y_max-1)],outline='blue',width=1)
+
+img_crop = img_join.crop((crop_x_min,crop_y_min,crop_x_max, crop_y_max,))
+
+tile_x_f = nowc_rain_tile_x >> zoom_f_diff
+tile_x_min_f = tile_x_min >> zoom_f_diff
+tile_x_max_f = tile_x_max >> zoom_f_diff
+tile_y_f = nowc_rain_tile_y >> zoom_f_diff
+tile_y_min_f = tile_y_min >> zoom_f_diff
+tile_y_max_f = tile_y_max >> zoom_f_diff
+
+in_img_w_f=img_w*(tile_x_max_f-tile_x_min_f+1)
+in_img_h_f=img_h*(tile_y_max_f-tile_y_min_f+1)
+img_join_f: Image = Image.new('RGBA', (in_img_w_f, in_img_h_f))
+for y in range(tile_y_min_f, tile_y_max_f+1):
+    for x in range(tile_x_min_f, tile_x_max_f+1):
+        # print(x,y)
+        img_load=load_rain_image_one(zoom_f,x,y,nowc_basetime, nowc_basetime)
+        if _DEBUG_ADDRESS_:
+            draw=ImageDraw.Draw(img_load)
+            draw.rectangle([(0,0),(img_load.width-1,img_load.height-1)],outline='red',width=1)
+            draw.text((40,10), f'x={x}, y={y}',fill='black')
+        px=(x-tile_x_min_f)*img_w
+        py=(y-tile_y_min_f)*img_h
+        img_join_f.paste(img_load.convert('RGBA'),(px,py))
+img_join_fr = img_join_f.resize((img_join_f.width << zoom_f_diff, img_join_f.height << zoom_f_diff), resample=Image.BOX)
+
+crop_x_min_fr1 = img_w * (tile_x_min - (tile_x_min_f << zoom_f_diff))
+crop_y_min_fr1 = img_h * (tile_y_min - (tile_y_min_f << zoom_f_diff))
+
+img_join_fr1 = img_join_fr.crop((crop_x_min_fr1, crop_y_min_fr1, crop_x_min_fr1 + img_join.width, crop_y_min_fr1 + img_join.height,))
+img_join_fr2 = img_join_fr1.crop((crop_x_min,crop_y_min,crop_x_max, crop_y_max,))
+img_composite = Image.composite(
+    img_join_fr2, img_crop,
+    Image.eval(img_join_fr2.getchannel('A'), lambda a: 0xCC if a > 0 else 0x33)
+)
+
+dt_valid_utc=datetime.datetime.strptime(nowc_validtime, '%Y%m%d%H%M%S').replace(tzinfo=datetime.timezone.utc)
+dt_valid_jst=dt_valid_utc.astimezone(datetime.timezone(datetime.timedelta(hours=9)))
+dt_valid_jst_slack=dt_valid_jst.strftime("%Y/%m/%d %H:%M")
+dt_valid_jst_slack_fname=dt_valid_jst.strftime("%Y%m%d_%H%M")
+
+img_mimetype_out='image/png'
+upload_fname=f'nowcast_rain_{dt_valid_jst_slack_fname}.png'
+
+buf_img_up=BytesIO()
+img_up=img_composite.save(buf_img_up, format='PNG')
+buf_img_up.seek(0)
+bytes_img_up=buf_img_up.read()
+
+send_slack(
+    dt_valid_jst_slack,
+    'ナウキャスト 雨雲レーダー',
+    [bytes_img_up],
+    [upload_fname],
+    [img_mimetype_out],
+    ['雨雲レーダー'],
+    ['降雨エリア・強さが示されている地図画像'],
+    remove_same_title=True,
+)

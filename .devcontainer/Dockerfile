@@ -24,9 +24,9 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 # Pythonパッケージインストール
 RUN pip install --no-cache-dir \
-    prettytable \
     slack-sdk \
     python-dotenv \
+    Pillow \
     requests \
     bs4 
 
