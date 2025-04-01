@@ -383,21 +383,21 @@ else :
 zoom_f_diff = nowc_rain_zoom - zoom_f
 
 
-# area_json = load_json(area_url)
+area_json = load_json(area_url)
 
-# area_class10_json = area_json['class10s'][area_class10_cd]
-# area_class10_nm = area_class10_json['name']
-# area_office_cd = area_class10_json['parent']
-# area_office_json = area_json['offices'][area_office_cd]
-# area_office_nm= area_office_json['name']
+area_class10_json = area_json['class10s'][area_class10_cd]
+area_class10_nm = area_class10_json['name']
+area_office_cd = area_class10_json['parent']
+area_office_json = area_json['offices'][area_office_cd]
+area_office_nm= area_office_json['name']
 
-# fcst_url = fcst_url_format.format(area_office_cd=area_office_cd)
-# fcst_json = load_json(fcst_url)
+fcst_url = fcst_url_format.format(area_office_cd=area_office_cd)
+fcst_json = load_json(fcst_url)
 
-# vpfd_url = vpfd_url_format.format(area_class10_cd=area_class10_cd)
-# vpfd_json = load_json(vpfd_url)
+vpfd_url = vpfd_url_format.format(area_class10_cd=area_class10_cd)
+vpfd_json = load_json(vpfd_url)
 
-# proc_main(fcst_json, vpfd_json)
+proc_main(fcst_json, vpfd_json)
 
 
 from PIL import Image, ImageDraw, ImageFont
