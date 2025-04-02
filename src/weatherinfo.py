@@ -1,7 +1,7 @@
 import os
 import json
 
-from typing import List, Tuple, Dict, Set
+from typing import List, Tuple, Dict, Set, Any
 from pprint import pprint
 from collections import defaultdict
 
@@ -9,6 +9,7 @@ import requests
 import datetime
 import dotenv
 import slack_sdk
+import decimal
 
 _DEBUG_ADDRESS_=False
 
@@ -19,8 +20,9 @@ SP_ZEN=chr(0x3000) # 「全角」のスペース
 SP_NRM=chr(0x0020) # 「通常」のスペース
 
 def load_json(url:str)->any:
-    resp = requests.get(url)
     print(url)
+    resp = requests.get(url)
+    print(f'{resp.status_code} {resp.reason}')
     json_raw = resp.text
     json_obj = json.loads(json_raw)
     # pprint(json_obj)
@@ -50,24 +52,34 @@ def prepare_slack():
             raise ValueError('チャンネルIDを特定できない')
     print(f'チャンネルID: {slack_ch_id}')
 
-def send_slack_text(message: str) -> float:
-    resp_p = slack_cli.chat_postMessage(
-        channel=slack_ch_id,
-        text=message
-    )
+def send_slack_text(text: str, blocks:List[Dict[str,any]] = None, event_type: str = None, event_payload: any = None) -> float:
+    msgjson={
+        'channel': slack_ch_id,
+        'text': text,
+    }
+    if blocks is not None:
+        msgjson['blocks']=blocks
+        pprint(blocks)
+    if event_type is not None:
+        assert event_payload is not None, "event_typeを指定する場合event_payloadは必須です"
+        msgjson['metadata']={'event_type': event_type}
+    if event_payload is not None:
+        assert event_type is not None, "event_payloadを指定する場合event_typeは必須です"
+        msgjson['metadata']['event_payload']=event_payload
+
+    resp_p = slack_cli.chat_postMessage(**msgjson)
     post_ts=resp_p["ts"]
     print(f'送信成功: {post_ts}')
     return post_ts
 
 def send_slack_images(
-        files:List[bytes] = None,
+        files:List[bytes],
         file_names:List[str] = None,
         file_mimetypes:List[str] = None,
         file_titles:List[str] = None,
         file_alts:List[str] = None,
-        message: str = None, 
-    ) -> str:
-        slack_up_files:List[any]=list()
+    ) -> Tuple[str, str]: #(file_id, url_private)
+        slack_up_files:List[str, str]=list()
         for i, file in enumerate(files):
             slack_get_up_params={
                 'filename': upload_fname,
@@ -98,48 +110,40 @@ def send_slack_images(
             print(resp_put)
             print(f'{resp_put.status_code} {resp_put.reason}')
             resp_put.raise_for_status()
-
-        print(f'to chhannel {slack_ch_id}')
         resp_compl = slack_cli.files_completeUploadExternal(
             files = slack_up_files,
-            channel_id = slack_ch_id,
-            initial_comment = message
+            # channel_id = slack_ch_id,
         )
         print(resp_compl)
-        return slack_up_files[-1]['id']
+        return [(x['id'],x['url_private'],) for x in resp_compl['files']]
 
-def delete_slack_same_titles(title: str, post_ts: float, post_file_id: str, check_limit:int = 10):
-    if title is None:
-        return
-    title_slack=f'*{title}*'
+def delete_slack_same_titles(event_type: str, post_ts: float=None, check_limit:int = 10):
     resp_h = slack_cli.conversations_history(
         channel=slack_ch_id,
         limit=check_limit, # 直近N件以内に同じタイトルがあれば削除
+        include_all_metadata=True,
     ) #TODO post_tsがあるばあい、それをlatestとして指定する
     past_messages = resp_h["messages"]
 
     for past_msg in past_messages:
-        print(past_msg)
-        past_text = past_msg.get("text", "")
+        # print(past_msg)
         past_user = past_msg.get("user", "system/unknown")
         past_ts = past_msg.get("ts")
         # print(f"{i}. ユーザー: {user}, 時間: {ts}, メッセージ: {text}")
-
         #消さない条件
         if past_user != slack_bot_user_id: #ユーザーが異なる
-            continue
-        if not past_text.startswith(title_slack): #1行目(タイトル)が異なる
+            # print("skip: user")
             continue
         if post_ts is not None and past_ts >= post_ts: #tsが指定されていて、それと同じか新しい
+            # print("skip: ts")
             continue
-        if post_file_id is not None and post_file_id in [f['id'] for f in past_msg.get('files',[])]: #filesが指定されていて、それが含まれる
+        if event_type is not None and past_msg.get('metadata',{}).get('event_type') != event_type: #posttypeが異なる
+            # print(f"skip: event_type me: {event_type}   you: {past_msg.get('metadata',{}).get('event_type')}")
             continue
         #ここに到達したら削除対象
         #ユーザーが同一
-        #一行目(タイトル)が一致
+        #ぽstTypeが一致
         #TSがあった場合、それより古い
-        #FILESがあった場合、含まない
-
 
         resp_d = slack_cli.chat_delete(
             channel=slack_ch_id,
@@ -152,35 +156,63 @@ def delete_slack_same_titles(title: str, post_ts: float, post_file_id: str, chec
 
 
 def send_slack(
-        message:str,
-        title:str = None,
-        files:List[bytes] = None,
-        file_names:List[str] = None,
-        file_mimetypes:List[str] = None,
-        file_titles:List[str] = None,
-        file_alts:List[str] = None,
-        remove_same_title: bool = False,
+        text:str,
+        blocks:List[Dict[str,any]] = None,
+        header:str = None,
+        footer:str|List[Dict[str,any]] = None,
+        event_type:str = None,
+        event_payload:any = None,
+        remove_past:int = 0,
     )->None:
     prepare_slack()
-    if title is not None:
-        message_slack=f'*{title}*\n{message}'
+    blocks_fix:List[any] = None
+    if blocks is not None and len(blocks)>0:
+        blocks_fix=blocks.copy()
     else:
-        message_slack=f'{message}'
-    try:
-        if files is None:
-            post_ts = send_slack_text(message_slack)
-            file_id = None
+        blocks_fix=[
+            {
+                "type": "section",
+                "text": {
+                    "type": "plain_text",
+                    "text": text,
+                    "emoji": True
+                }
+            }
+        ]
+    if header is not None:
+        blocks_fix.insert(0, {
+            "type": "header",
+            "text": {
+                "type": "plain_text",
+                "text": header,
+                "emoji": True
+            }
+        })
+    if footer is not None:
+        if isinstance(footer, str):
+            blocks_fix.append({
+                "type": "section",
+                "text": {
+                    "type": "plain_text",
+                    "text": footer,
+                    "emoji": True
+                }
+            })
+        elif isinstance(footer, dict):
+            blocks_fix.append(footer)
         else:
-            file_id = send_slack_images(files, file_names, file_mimetypes, file_titles, file_alts, message_slack)
-            post_ts = None
-        if remove_same_title and title is not None:
-            delete_slack_same_titles(title, post_ts, file_id)
+            raise ValueError(f'invalid footer type: {type(footer)}')
+    try:
+        post_ts = send_slack_text(text, blocks_fix, event_type=event_type, event_payload=event_payload)
+        if remove_past > 0:
+            delete_slack_same_titles(event_type, post_ts=post_ts, check_limit=remove_past)
 
-    except slack_sdk.SlackApiError as e:
+    except slack_sdk.errors.SlackApiError as e:
         print("APIエラー:", e.response["error"])
         raise e
+    return post_ts
 
-def select_fcst_00_weather(raw_data: any, select_data: any, area_index: int) -> None:
+def select_fcst_00_weather(raw_data: Dict[str,any], select_data: Dict[str,any], area_index: int) -> None:
     area_raw_data = raw_data['areas'][area_index]
     for i, dt_raw in enumerate(raw_data['timeDefines']):
         select_data[dt_raw]['weather']=area_raw_data['weathers'][i]
@@ -188,30 +220,30 @@ def select_fcst_00_weather(raw_data: any, select_data: any, area_index: int) -> 
         select_data[dt_raw]['wave']=area_raw_data['waves'][i]
         select_data[dt_raw]['weather_code']=area_raw_data['weatherCodes'][i]
 
-def select_fcst_01_pop(raw_data: any, select_data: any, area_index: int) -> None: #pop == Probability of Precipitation == Chance of rain
+def select_fcst_01_pop(raw_data: Dict[str,any], select_data: Dict[str,any], area_index: int) -> None: #pop == Probability of Precipitation == Chance of rain
     area_raw_data = raw_data['areas'][area_index]
     for i, dt_raw in enumerate(raw_data['timeDefines']):
         select_data[dt_raw]['pop']=area_raw_data['pops'][i]
 
-def select_fcst_02_temperature(raw_data: any, select_data: any, area_index: int) -> None:
+def select_fcst_02_temperature(raw_data: Dict[str,any], select_data: Dict[str,any], area_index: int) -> None:
     area_raw_data = raw_data['areas'][area_index]
     for i, dt_raw in enumerate(raw_data['timeDefines']):
         select_data[dt_raw]['temperature_minmax'] = area_raw_data['temps'][i] # 0時が「朝の最低気温」、9時が「日中の最高気温」で固定されているように見える。おそらく9時以降の発表では0時にも最高気温が入ってるっぽい TODO 仕様書。。。
 
-def select_vpfd_area(raw_data: any, select_data: any) -> None:
+def select_vpfd_area(raw_data: Dict[str,any], select_data: Dict[str,any]) -> None:
     for i, dt_json_raw in enumerate(raw_data['timeDefines']):
         dt_raw = dt_json_raw['dateTime']
         select_data[dt_raw]['weather'] = raw_data['weather'][i]
         select_data[dt_raw]['wind'] = raw_data['wind'][i]
 
-def select_vpfd_point(raw_data: any, select_data: any) -> None:
+def select_vpfd_point(raw_data: Dict[str,any], select_data: Dict[str,any]) -> None:
     for i, dt_json_raw in enumerate(raw_data['timeDefines'][:-1]): # 最後の要素は無視(areaは時間レンジの予報、pointは時刻瞬間の予報なので、pointが一つ多い。24時間以上の瞬間の気温をそこまで知りたいことはないので)
         dt_raw = dt_json_raw['dateTime']
         select_data[dt_raw]['temperature'] = raw_data['temperature'][i]
         select_data[dt_raw]['temperature_max'] = raw_data['maxTemperature'][i]
         select_data[dt_raw]['temperature_min'] = raw_data['minTemperature'][i]
 
-def format_fcst(select_data:any) -> List[str]:
+def format_fcst(select_data:Dict[str,any]) -> List[str]:
     texts: List[str] = []
     text_translator = str.maketrans(f'０１２３４５６７８９．{SP_ZEN}',f'0123456789.{SP_NRM}','')
     for dt_raw in sorted(select_data.keys()):
@@ -230,7 +262,7 @@ def format_fcst(select_data:any) -> List[str]:
         )
     return texts
 
-def format_vpfd(select_data:any) -> List[str]:
+def format_vpfd(select_data:Dict[str,any]) -> List[str]:
     texts: List[str] = []
 
     temperature_num_digits=max([len(f'{_x.get('temperature',0):d}') for _x in select_data.values()])
@@ -297,7 +329,33 @@ def format_vpfd(select_data:any) -> List[str]:
             last_pop = pop_raw
     return texts
 
-def proc_main(fcst_json:any, vpfd_json:any)->str:
+def check_vpfd_update(past_messages:List[Dict[str,any]], vpfd_rep_dt:datetime.datetime , fcst_rep_dt: datetime.datetime)-> bool:
+    vpfd_past_max_time=fcst_past_max_time=datetime.datetime.min.replace(tzinfo=datetime.timezone(datetime.timedelta(hours=9)))
+    for past_msg in past_messages:
+        # print(past_msg)
+        if past_msg['user']!=slack_bot_user_id:
+            # print('continue by user')
+            continue
+        if past_msg.get('metadata',{}).get('event_type') != slack_meta_event_type_fcst:
+            # print('continue by event')
+            continue
+        vpfd_past_time=past_msg.get('metadata',{}).get('event_payload',{}).get('vpfd_reportDatetime')
+        fcst_past_time=past_msg.get('metadata',{}).get('event_payload',{}).get('fcst_reportDatetime')
+        if vpfd_past_time is None:
+            # print('continue by vpfd null')
+            continue
+        if fcst_past_time is None:
+            # print('continue by fcst null')
+            continue
+        chk_vpfd=parse_dt_str(vpfd_past_time)
+        chk_fcst=parse_dt_str(fcst_past_time)
+        if chk_vpfd>=vpfd_past_max_time and chk_fcst>=fcst_past_max_time:
+            vpfd_past_max_time=chk_vpfd
+            fcst_past_max_time=chk_fcst
+    return (vpfd_rep_dt>vpfd_past_max_time) or (fcst_rep_dt>fcst_past_max_time)
+
+def proc_main(fcst_json:Dict[str,any], vpfd_json:Dict[str,any])->None:
+
     fcst_pub_office_raw: str = fcst_json[0]['publishingOffice']
     fcst_rep_dt_raw: str = fcst_json[0]['reportDatetime']
     fcst_rep_dt = parse_dt_str(fcst_rep_dt_raw)
@@ -308,6 +366,14 @@ def proc_main(fcst_json:any, vpfd_json:any)->str:
         else:
             raise ValueError(f'area {area_class10_cd} not found.')
     
+    vpfd_pub_office_raw=vpfd_json['publishingOffice']
+    vpfd_rep_dt_raw=vpfd_json['reportDateTime']
+    vpfd_rep_dt=parse_dt_str(vpfd_rep_dt_raw)
+
+    if not check_vpfd_update(slack_past_msgs, vpfd_rep_dt, fcst_rep_dt):
+        return #データ更新なし
+
+
     fcst_select_data=defaultdict(dict)
     vpfd_select_data=defaultdict(dict)
 
@@ -315,9 +381,6 @@ def proc_main(fcst_json:any, vpfd_json:any)->str:
     select_fcst_01_pop(fcst_json[0]['timeSeries'][1], vpfd_select_data, fcst_area_index)
     select_fcst_02_temperature(fcst_json[0]['timeSeries'][2], vpfd_select_data, fcst_area_index)
 
-    vpfd_pub_office_raw=vpfd_json['publishingOffice']
-    vpfd_rep_dt_raw=vpfd_json['reportDateTime']
-    vpfd_rep_dt=parse_dt_str(vpfd_rep_dt_raw)
     vpfd_info_type=vpfd_json['infoType']
     vpfd_announce_dt_slack=f'{vpfd_pub_office_raw} {vpfd_rep_dt.month}月{vpfd_rep_dt.day}日{vpfd_rep_dt.hour}時 {vpfd_info_type}'
     vpfd_area_nm_raw=vpfd_json['pointTimeSeries']['pointNameJP'] # TODOこれはエリア名ではなく気温？ポイント名
@@ -332,9 +395,20 @@ def proc_main(fcst_json:any, vpfd_json:any)->str:
 
     vpfd_texts = [f'{vpfd_area_nm_slack}{SP}-{SP}{vpfd_announce_dt_slack}']
     vpfd_texts.extend(format_vpfd(vpfd_select_data))
-    vpfd_texts.append(f'from <{vpfd_link_url} | {vpfd_link_text} >')
     vpfd_slack = '\n'.join(vpfd_texts)
-    send_slack(vpfd_slack, title='時系列天気:', remove_same_title=True)
+    vpfd_footer_slack={
+        "type": "section",
+        "text": {
+            "type": "mrkdwn",
+            "text": f'source <{vpfd_link_url} | {vpfd_link_text} >',
+        }
+    }
+    vpfd_meta={
+        'fcst_reportDatetime':fcst_rep_dt_raw,
+        'vpfd_reportDatetime':vpfd_rep_dt_raw,
+    }
+    # send_slack_deplecated(vpfd_slack, header='時系列天気:', remove_same_title=True, post_type=slack_meta_event_type_fcst)
+    send_slack(vpfd_slack, header='時系列天気', footer=vpfd_footer_slack, remove_past=10, event_type=slack_meta_event_type_fcst, event_payload=vpfd_meta)
 
 dotenv.load_dotenv()
 
@@ -343,6 +417,10 @@ slack_ch_nm = os.environ['SLACK_CH_NM']
 slack_cli = None
 slack_bot_user_id = None
 slack_ch_id = None
+
+slack_meta_event_type_fcst = 'fjworks_weatherinfo'
+slack_meta_event_type_nowc = 'fjworks_nowcast_rain'
+
 
 area_class10_cd = os.environ['JMA_AREA_CD'] # TOKYO 130010
 area_url = 'https://www.jma.go.jp/bosai/common/const/area.json'
@@ -383,6 +461,19 @@ else :
 zoom_f_diff = nowc_rain_zoom - zoom_f
 
 
+
+prepare_slack()
+slack_past_msgs_ts=f'{datetime.datetime.now(datetime.timezone.utc).timestamp() - 24 * 60 * 60: .6f}'
+# print('past' , past_msgs_ts)
+past_msgs_resp=slack_cli.conversations_history(
+    channel=slack_ch_id,
+    include_all_metadata=True,
+    inclusive=True,
+    limit=999, #ページングしない最大は999らしい?
+    oldest=slack_past_msgs_ts,
+)
+slack_past_msgs=past_msgs_resp['messages']
+
 area_json = load_json(area_url)
 
 area_class10_json = area_json['class10s'][area_class10_cd]
@@ -412,10 +503,6 @@ pxl_x_max_raw=nowc_rain_pixel_x+nowc_rain_radar_range
 pxl_y_min_raw=nowc_rain_pixel_y-nowc_rain_radar_range
 pxl_y_max_raw=nowc_rain_pixel_y+nowc_rain_radar_range
 
-print(pxl_x_min_raw,pxl_y_min_raw,)
-print(pxl_x_max_raw,pxl_x_max_raw,)
-
-
 nowc_json = load_json('https://www.jma.go.jp/bosai/jmatile/data/nowc/targetTimes_N1.json')
 nowc_basetime = max(
     nowc_json, 
@@ -424,6 +511,30 @@ nowc_basetime = max(
 nowc_validtime = max(
     filter(lambda x: x['basetime']==nowc_basetime, nowc_json)
 )['validtime']
+
+
+nowc_past_max_time=-1
+for past_msg in slack_past_msgs:
+    if past_msg['user']!=slack_bot_user_id:
+        # print('continue by user')
+        continue
+    if past_msg.get('metadata',{}).get('event_type') != slack_meta_event_type_nowc:
+        # print('continue by event')
+        continue
+    nowc_past_msg_base_time=past_msg.get('metadata',{}).get('event_payload',{}).get('basetime')
+    nowc_past_msg_valid_time=past_msg.get('metadata',{}).get('event_payload',{}).get('validtime')
+    if nowc_past_msg_base_time is None:
+        # print('continue by base null')
+        continue
+    if nowc_past_msg_valid_time is None:
+        # print('continue by valid null')
+        continue
+    if nowc_past_msg_base_time!=nowc_past_msg_valid_time:
+        # print('continue by time diff')
+        continue
+    nowc_past_max_time=max(nowc_past_max_time, int(nowc_past_msg_base_time)) if nowc_past_max_time is not None else int(nowc_past_msg_base_time)
+if nowc_past_max_time >= int(nowc_validtime):
+    exit()
 
 def load_image_url(url):
     print(url)
@@ -525,13 +636,50 @@ img_up=img_composite.save(buf_img_up, format='PNG')
 buf_img_up.seek(0)
 bytes_img_up=buf_img_up.read()
 
-send_slack(
-    dt_valid_jst_slack,
-    'ナウキャスト 雨雲レーダー',
+prepare_slack()
+
+uploaded_files=send_slack_images(
     [bytes_img_up],
     [upload_fname],
     [img_mimetype_out],
     ['雨雲レーダー'],
     ['降雨エリア・強さが示されている地図画像'],
-    remove_same_title=True,
 )
+slack_blocks=[{
+    "type": "image",
+    "slack_file": {'id': fid},
+    "alt_text":'雨雲レーダー',
+} for (fid, furl) in uploaded_files]
+slack_blocks.insert(0, {
+            "type": "section",
+            "text": {
+                "type": "plain_text",
+                "text": dt_valid_jst_slack,
+                "emoji": True
+            }
+        })
+slack_header='ナウキャスト 雨雲レーダー'
+slack_footer={
+        "type": "section",
+        "text": {
+            "type": "mrkdwn",
+            "text": f'source: <https://www.jma.go.jp/bosai/nowc/ | 気象庁ナウキャスト >',
+        }
+    }
+slack_text=dt_valid_jst_slack
+slack_meta={
+    'basetime':f'{nowc_basetime}',
+    'validtime':f'{nowc_validtime}',
+}
+import time
+for fid, furl in uploaded_files:
+    waittime=2.5
+    while True:
+        # print(fid,furl)
+        resp_fs=slack_cli.files_info(file=fid)
+        if 'original_w' in resp_fs['file'] and 'original_h' in resp_fs['file']: #非同期アップロードが完了した時に設定されると思われる属性ができるまで待つ
+            break
+        time.sleep(waittime)
+        # waittime=waittime*2
+post_ts=send_slack(slack_text, slack_blocks, slack_header, slack_footer, slack_meta_event_type_nowc, slack_meta, 10)
+# delete_slack_same_titles(post_ts=post_ts, event_type=slack_meta_event_type_nowc, check_limit=10)
