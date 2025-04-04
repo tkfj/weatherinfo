@@ -843,8 +843,8 @@ def get_8_direction(origin_x, origin_y, target_x, target_y):
     return directions[index]
 
 if near_lvl>0:
-    near_dst_meters=near_dst*mpp
-    heavy_dst_meters=heavy_dst*mpp
+    near_dst_meters=near_dst*mpp * (2 ** zoom_diff)
+    heavy_dst_meters=heavy_dst*mpp* (2 ** zoom_diff)
     near_dir=get_8_direction(wh, hh, near_pos[0], near_pos[1])
     heavy_dir=get_8_direction(wh, hh, heavy_pos[0], heavy_pos[1])
     
