@@ -10,8 +10,10 @@ import datetime
 import dotenv
 import slack_sdk
 import decimal
+import math
 
 _DEBUG_ADDRESS_=False
+_DEBUG_STORE_IMG_=False
 
 # SP=chr(0x2002) # 1/2em幅のスペース
 SP=chr(0x2007) # 固定幅フォントの数字と同じ幅のスペース
@@ -437,30 +439,46 @@ icon_snowy = os.environ['ICON_SNOWY']
 icon_sleety = os.environ['ICON_SLEETY']
 
 
-nowc_rain_zoom=int(os.environ['NOWCAST_RAIN_ZOOM'])
-nowc_rain_tile_x=int(os.environ['NOWCAST_RAIN_TILE_X'])
-nowc_rain_tile_y=int(os.environ['NOWCAST_RAIN_TILE_Y'])
-nowc_rain_pixel_x=int(os.environ['NOWCAST_RAIN_PIXEL_X'])
-nowc_rain_pixel_y=int(os.environ['NOWCAST_RAIN_PIXEL_Y'])
-nowc_rain_radar_range=int(os.environ['NOWCAST_RAIN_RADAR_RANGE'])
-nowc_rain_coming_range=int(os.environ['NOWCAST_RAIN_COMING_RANGE'])
-nowc_rain_detect_range=int(os.environ['NOWCAST_RAIN_DETECT_RANGE'])
+map_zoom=int(os.environ['NOWCAST_RAIN_ZOOM'])
+map_c_lat=float(os.environ['NOWCAST_RAIN_LAT'])
+map_c_lng=float(os.environ['NOWCAST_RAIN_LNG'])
+map_radar_meters=float(os.environ['NOWCAST_RAIN_RADAR_RANGE'])
+map_coming_meters=float(os.environ['NOWCAST_RAIN_COMING_RANGE'])
+map_detect_meters=float(os.environ['NOWCAST_RAIN_DETECT_RANGE'])
 
-if nowc_rain_zoom>14:
-    raise ValueError('Zoomレベルは4から14の間で指定してください')
-if nowc_rain_zoom>=10:
-    zoom_f=10
-elif nowc_rain_zoom>=8:
-    zoom_f=8
-elif nowc_rain_zoom>=6:
-    zoom_f=6
-elif nowc_rain_zoom>=4:
-    zoom_f=4
-else :
-    raise ValueError('Zoomレベルは4から14の間で指定してください')
-zoom_f_diff = nowc_rain_zoom - zoom_f
+def latlng_to_tile_pixel(lat, lng, zoom):
+    lat_rad = math.radians(lat)
+    n = 2 ** zoom
+    x = (lng + 180.0) / 360.0
+    y = (1.0 - math.log(math.tan(lat_rad) + 1 / math.cos(lat_rad)) / math.pi) / 2.0
+
+    tile_x = int(x * n)
+    tile_y = int(y * n)
+    pixel_x = int((x * n * 256) % 256)
+    pixel_y = int((y * n * 256) % 256)
+
+    return tile_x, tile_y, pixel_x, pixel_y
+
+def meters_per_pixel(lat, zoom):
+    return (156543.03392 * math.cos(math.radians(lat))) / (2 ** zoom)
 
 
+map_c_tile_x, map_c_tile_y, map_c_pxl_x, map_c_pxl_y = latlng_to_tile_pixel(map_c_lat, map_c_lng, map_zoom)
+mpp=meters_per_pixel(map_c_lat,map_zoom)
+map_radar_pxls=int(math.ceil(map_radar_meters/mpp))
+map_coming_pxls=int(math.ceil(map_coming_meters/mpp))
+map_detect_pxls=int(math.ceil(map_detect_meters/mpp))
+
+pprint(
+    f'{map_zoom=}\n'
+    f'{map_c_tile_x=}\n'
+    f'{map_c_tile_y=}\n'
+    f'{map_c_pxl_x=}\n'
+    f'{map_c_pxl_y=}\n'
+    f'{map_radar_pxls=}\n'
+    f'{map_coming_pxls=}\n'
+    f'{map_detect_pxls=}\n'
+)
 
 prepare_slack()
 slack_past_msgs_ts=f'{datetime.datetime.now(datetime.timezone.utc).timestamp() - 24 * 60 * 60: .6f}'
@@ -495,13 +513,24 @@ from PIL import Image, ImageDraw, ImageFont
 from io import BytesIO
 import math
 
-out_img_size_x=nowc_rain_radar_range*2
-out_img_size_y=nowc_rain_radar_range*2
+out_img_size_x=map_radar_pxls*2
+out_img_size_y=map_radar_pxls*2
 
-pxl_x_min_raw=nowc_rain_pixel_x-nowc_rain_radar_range
-pxl_x_max_raw=nowc_rain_pixel_x+nowc_rain_radar_range
-pxl_y_min_raw=nowc_rain_pixel_y-nowc_rain_radar_range
-pxl_y_max_raw=nowc_rain_pixel_y+nowc_rain_radar_range
+map_zoom = map_zoom
+if map_zoom>14:
+    raise ValueError('Zoomレベルは4から14の間で指定してください')
+if map_zoom>=10:
+    rain_zoom=10
+elif map_zoom>=8:
+    rain_zoom=8
+elif map_zoom>=6:
+    rain_zoom=6
+elif map_zoom>=4:
+    rain_zoom=4
+else :
+    raise ValueError('Zoomレベルは4から14の間で指定してください')
+zoom_diff = map_zoom - rain_zoom
+
 
 nowc_json = load_json('https://www.jma.go.jp/bosai/jmatile/data/nowc/targetTimes_N1.json')
 nowc_basetime = max(
@@ -551,77 +580,226 @@ def load_rain_image_one(lvl: int, tilex: int, tiley: int, basetime: str, validti
     url=f'https://www.jma.go.jp/bosai/jmatile/data/nowc/{basetime}/none/{validtime}/surf/hrpns/{lvl}/{tilex}/{tiley}.png'
     return load_image_url(url)
 
-img_center=load_base_image_one(nowc_rain_zoom,nowc_rain_tile_x,nowc_rain_tile_y)
-# img_center=load_rain_image_one(nowc_rain_zoom,nowc_rain_tile_x,nowc_rain_tile_y,'20250331092000', '20250331092000')
-img_w=img_center.width
-img_h=img_center.height
+map_c_tile=load_base_image_one(map_zoom,map_c_tile_x,map_c_tile_y)
+tile_w=map_c_tile.width
+tile_h=map_c_tile.height
 
-tile_x_min = math.trunc(math.floor(pxl_x_min_raw/img_w)) + nowc_rain_tile_x
-tile_x_max = math.trunc(math.floor(pxl_x_max_raw/img_w)) + nowc_rain_tile_x
-tile_y_min = math.trunc(math.floor(pxl_y_min_raw/img_h)) + nowc_rain_tile_y
-tile_y_max = math.trunc(math.floor(pxl_y_max_raw/img_h)) + nowc_rain_tile_y
+map_pxl_x = tile_w * map_c_tile_x + map_c_pxl_x
+map_pxl_xmin = map_pxl_x-map_radar_pxls
+map_pxl_xmax = map_pxl_x+map_radar_pxls
+map_pxl_y = tile_h * map_c_tile_y + map_c_pxl_y
+map_pxl_ymin = map_pxl_y-map_radar_pxls
+map_pxl_ymax = map_pxl_y+map_radar_pxls
+map_pxl_w = map_pxl_xmax - map_pxl_xmin
+map_pxl_h = map_pxl_ymax - map_pxl_ymin
 
-in_img_w=img_w*(tile_x_max-tile_x_min+1)
-in_img_h=img_h*(tile_y_max-tile_y_min+1)
-img_join: Image = Image.new('RGBA', (in_img_w, in_img_h))
-for y in range(tile_y_min, tile_y_max+1): 
-    for x in range(tile_x_min, tile_x_max+1):
-        if x==nowc_rain_tile_x and y==nowc_rain_tile_y:
-            img_load=img_center
-        else:
-            img_load=load_base_image_one(nowc_rain_zoom,x,y)
+rain_pxl_x = map_pxl_x // (2 ** zoom_diff)
+rain_pxl_xmin = rain_pxl_x - map_radar_pxls // (2 ** zoom_diff)
+rain_pxl_xmax = rain_pxl_x + map_radar_pxls // (2 ** zoom_diff)
+rain_pxl_y = map_pxl_y // (2 ** zoom_diff)
+rain_pxl_ymin = rain_pxl_y - map_radar_pxls // (2 ** zoom_diff)
+rain_pxl_ymax = rain_pxl_y + map_radar_pxls // (2 ** zoom_diff)
+rain_pxl_w = rain_pxl_xmax - rain_pxl_xmin
+rain_pxl_h = rain_pxl_ymax - rain_pxl_ymin
+
+map_tile_xmin = map_pxl_xmin // tile_w
+map_tile_xmax = map_pxl_xmax // tile_w
+map_tile_ymin = map_pxl_ymin // tile_h
+map_tile_ymax = map_pxl_ymax // tile_h
+
+map_load_pxl_xmin = map_tile_xmin * tile_w
+map_load_pxl_xmax = (map_tile_xmax + 1) * tile_w
+map_load_pxl_ymin = map_tile_ymin * tile_h
+map_load_pxl_ymax = (map_tile_ymax + 1) * tile_h
+
+map_w = map_load_pxl_xmax - map_load_pxl_xmin
+map_h = map_load_pxl_ymax - map_load_pxl_ymin
+print((map_w, map_h))
+map_img: Image = Image.new('RGBA', (map_w, map_h))
+
+for ty in range(map_tile_ymin, map_tile_ymax + 1): 
+    for tx in range(map_tile_xmin, map_tile_xmax + 1):
+        # if tx == nowc_rain_tile_x and ty == nowc_rain_tile_y:
+        #     img_load = map_c_tile
+        # else:
+        map_load = load_base_image_one(map_zoom, tx, ty)
         if _DEBUG_ADDRESS_:
-            draw=ImageDraw.Draw(img_load)
-            draw.rectangle([(0,0),(img_load.width-1,img_load.height-1)],outline='black',width=1)
-            draw.text((10,10), f'x={x}, y={y}',fill='black')
-            if x==nowc_rain_tile_x and y==nowc_rain_tile_y:
-                draw.line((0,0,img_load.width-1,img_load.height-1), fill='black', width=1)
-                draw.line((0,img_load.width-1,img_load.height-1,0), fill='black', width=1)
-        px=(x-tile_x_min)*img_w
-        py=(y-tile_y_min)*img_h
-        img_join.paste(img_load.convert('RGBA'),(px,py))
-crop_x_min=pxl_x_min_raw-(img_w*(tile_x_min - nowc_rain_tile_x))
-crop_x_max=pxl_x_max_raw-(img_w*(tile_x_min - nowc_rain_tile_x))
-crop_y_min=pxl_y_min_raw-(img_h*(tile_y_min - nowc_rain_tile_y))
-crop_y_max=pxl_y_max_raw-(img_h*(tile_y_min - nowc_rain_tile_y))
+            draw=ImageDraw.Draw(map_load)
+            draw.rectangle([(0,0),(map_load.width-1,map_load.height-1)],outline='black',width=1)
+            draw.text((10,10), f'x={tx}, y={ty}',fill='black')
+            if tx==map_c_tile_x and ty==map_c_tile_y:
+                draw.line((0,0,map_load.width-1,map_load.height-1), fill='black', width=1)
+                draw.line((0,map_load.width-1,map_load.height-1,0), fill='black', width=1)
+        if _DEBUG_STORE_IMG_:
+            map_load.save(f'./map_load_{map_zoom}_{tx}_{ty}.png')
+        px = (tx - map_tile_xmin) * tile_w
+        py = (ty - map_tile_ymin) * tile_h
+        print((px,py))
+        map_img.paste(map_load.convert('RGBA'), (px, py))
 if _DEBUG_ADDRESS_:
-    draw=ImageDraw.Draw(img_join)
-    draw.rectangle([(crop_x_min,crop_y_min),(crop_x_max-1,crop_y_max-1)],outline='blue',width=1)
+    draw=ImageDraw.Draw(map_img)
+    draw.ellipse(
+        (
+            map_pxl_xmin - map_load_pxl_xmin,
+            map_pxl_ymin - map_load_pxl_ymin,
+            map_pxl_xmax - map_load_pxl_xmin,
+            map_pxl_ymax - map_load_pxl_ymin,
+        ),
+        outline='red', width=1
+    )
 
-img_crop = img_join.crop((crop_x_min,crop_y_min,crop_x_max, crop_y_max,))
+map_crop = map_img.crop((
+    map_pxl_xmin - map_load_pxl_xmin,
+    map_pxl_ymin - map_load_pxl_ymin,
+    map_pxl_xmax - map_load_pxl_xmin,
+    map_pxl_ymax - map_load_pxl_ymin,
+ ))
 
-tile_x_f = nowc_rain_tile_x >> zoom_f_diff
-tile_x_min_f = tile_x_min >> zoom_f_diff
-tile_x_max_f = tile_x_max >> zoom_f_diff
-tile_y_f = nowc_rain_tile_y >> zoom_f_diff
-tile_y_min_f = tile_y_min >> zoom_f_diff
-tile_y_max_f = tile_y_max >> zoom_f_diff
+if _DEBUG_STORE_IMG_:
+    map_load.save('./map_load.png')
+    map_img.save('./map_img.png')
+    map_crop.save('./map_crop.png')
 
-in_img_w_f=img_w*(tile_x_max_f-tile_x_min_f+1)
-in_img_h_f=img_h*(tile_y_max_f-tile_y_min_f+1)
-img_join_f: Image = Image.new('RGBA', (in_img_w_f, in_img_h_f))
-for y in range(tile_y_min_f, tile_y_max_f+1):
-    for x in range(tile_x_min_f, tile_x_max_f+1):
-        # print(x,y)
-        img_load=load_rain_image_one(zoom_f,x,y,nowc_basetime, nowc_basetime)
+rain_tile_xmin = map_tile_xmin // (2 ** zoom_diff)
+rain_tile_xmax = map_tile_xmax // (2 ** zoom_diff)
+rain_tile_ymin = map_tile_ymin // (2 ** zoom_diff)
+rain_tile_ymax = map_tile_ymax // (2 ** zoom_diff)
+
+rain_load_pxl_xmin = rain_tile_xmin * tile_w
+rain_load_pxl_xmax = (rain_tile_xmax + 1) * tile_w
+rain_load_pxl_ymin = rain_tile_ymin * tile_h
+rain_load_pxl_ymax = (rain_tile_ymax + 1) * tile_h
+
+rain_w = rain_load_pxl_xmax - rain_load_pxl_xmin
+rain_h = rain_load_pxl_ymax - rain_load_pxl_ymin
+print((rain_w, rain_h))
+
+rain_img: Image = Image.new('RGBA', (rain_w, rain_h))
+
+for ty in range(rain_tile_ymin, rain_tile_ymax + 1): 
+    for tx in range(rain_tile_xmin, rain_tile_xmax + 1):
+        # rain_load = load_base_image_one(rain_zoom, tx, ty)
+        rain_load=load_rain_image_one(rain_zoom,tx,ty,nowc_basetime, nowc_basetime)
         if _DEBUG_ADDRESS_:
-            draw=ImageDraw.Draw(img_load)
-            draw.rectangle([(0,0),(img_load.width-1,img_load.height-1)],outline='red',width=1)
-            draw.text((40,10), f'x={x}, y={y}',fill='black')
-        px=(x-tile_x_min_f)*img_w
-        py=(y-tile_y_min_f)*img_h
-        img_join_f.paste(img_load.convert('RGBA'),(px,py))
-img_join_fr = img_join_f.resize((img_join_f.width << zoom_f_diff, img_join_f.height << zoom_f_diff), resample=Image.BOX)
+            draw=ImageDraw.Draw(rain_load)
+            draw.rectangle([(0,0),(rain_load.width-1,rain_load.height-1)],outline='blue',width=1)
+            draw.text((10,10), f'x={tx}, y={ty}',fill='blue')
+        if _DEBUG_STORE_IMG_:
+            rain_load.save(f'./rain_load_{rain_zoom}_{tx}_{ty}.png')
+        px = (tx - rain_tile_xmin) * tile_w 
+        py = (ty - rain_tile_ymin) * tile_h
+        print((px,py))
+        rain_img.paste(rain_load.convert('RGBA'), (px, py))
 
-crop_x_min_fr1 = img_w * (tile_x_min - (tile_x_min_f << zoom_f_diff))
-crop_y_min_fr1 = img_h * (tile_y_min - (tile_y_min_f << zoom_f_diff))
-
-img_join_fr1 = img_join_fr.crop((crop_x_min_fr1, crop_y_min_fr1, crop_x_min_fr1 + img_join.width, crop_y_min_fr1 + img_join.height,))
-img_join_fr2 = img_join_fr1.crop((crop_x_min,crop_y_min,crop_x_max, crop_y_max,))
-img_composite = Image.composite(
-    img_join_fr2, img_crop,
-    Image.eval(img_join_fr2.getchannel('A'), lambda a: 0xCC if a > 0 else 0x33)
+rain_crop = rain_img.crop((
+    rain_pxl_xmin - rain_load_pxl_xmin,
+    rain_pxl_ymin - rain_load_pxl_ymin,
+    rain_pxl_xmax - rain_load_pxl_xmin,
+    rain_pxl_ymax - rain_load_pxl_ymin,
+))
+rain_resize = rain_crop.resize((map_crop.width, map_crop.height), Image.Resampling.BOX)
+rain_composite = Image.composite(
+    rain_resize, map_crop,
+    Image.eval(rain_resize.getchannel('A'), lambda a: 0xCC if a > 0 else 0x33)
 )
+if _DEBUG_STORE_IMG_:
+    rain_load.save('./rain_load.png')
+    rain_img.save('./rain_img.png')
+    rain_crop.save('./rain_crop.png')
+    rain_resize.save('./rain_resize.png')
+    rain_composite.save('./rain_composite.png')
+
+
+wh=rain_crop.width // 2
+hh=rain_crop.height // 2
+rain_radar_pxls=map_radar_pxls//(2**zoom_diff)
+rain_coming_pxls=map_coming_pxls//(2**zoom_diff)
+rain_detect_pxls=map_detect_pxls//(2**zoom_diff)
+print(wh,hh)
+print(map_radar_pxls)
+# memo
+# L0   0mm 255,255,255,  0    0,  0,100 白（ただし透明） ←HSV　色相 彩度 明度
+# L1 ~ 5mm 242,242,255,255  240,  5,100 限りなく白に近い水色
+# L2 ~10mm 160,210,255,255  208, 37,100 薄い水色
+# L3 ~20mm  33,140,255,255  211, 87,100 ほぼ青(濃い水色)
+# L4 ~30mm 250,245,  0,255  き
+# L5 ~50mm 255,153,  0,255 だいだい
+# L6 ~80mm 255, 40,  0,255 あか
+# L7 ~xxmm 180,  0,104,255 あずき
+level_by_color={
+    (255,255,255,  0):0,
+    (242,242,255,255):1,
+    (160,210,255,255):2,
+    ( 33,140,255,255):3,
+    (  0, 65,255,255):4,
+    (250,245,  0,255):5,
+    (255,153,  0,255):6,
+    (255, 40,  0,255):7,
+    (180,  0,104,255):8, #あずき
+}
+amount_by_level={
+    1:'1mm未満',
+    2:'1-5mm',
+    3:'5-10mm',
+    4:'10-20mm',
+    5:'20-30mm',
+    6:'30-50mm',
+    7:'50-80mm',
+    8:'80mm以上',
+}
+heavy_pos=None
+heavy_dst=float('inf')
+heavy_lvl=-1
+
+near_pos=None
+near_dst=float('inf')
+near_lvl=-1
+
+zzzz:Dict[any,any]=dict()
+img_chart=Image.new("RGBA",rain_crop.size)
+pxls=rain_crop.load()
+pxlsw=img_chart.load()
+for ty in range(0, wh):
+    for tx in range(0, hh):
+        l=math.hypot(tx,ty)
+        if l > rain_coming_pxls and l > rain_detect_pxls:
+            continue
+        for yyy in [1,-1]: 
+            if ty==0 and yyy==-1:
+                continue
+            for xxx in [1,-1]:
+                if tx==0 and xxx==-1:
+                    continue
+                c=pxls[wh+tx*xxx,hh+ty*yyy]
+                pc=level_by_color.get(c,-1)
+                ccc=zzzz.get(c)
+                if ccc is not None:
+                    zzzz[c]=(ccc[0]+1, ccc[1], pc)
+                else:
+                    zzzz[c]=(1, len(zzzz)+1, pc)
+                if pc>=0:
+                    pxlsw[wh+tx*xxx,hh+ty*yyy]=(32*pc-1,32*pc-1,32*pc-1,255)
+                else:
+                    pxlsw[wh+tx*xxx,hh+ty*yyy]=(255,0,0,255)
+                if pc > 0 and pc > heavy_lvl or (pc == heavy_lvl and l < heavy_dst):
+                    heavy_pos=(wh+tx*xxx,hh+ty*yyy)
+                    heavy_dst=l
+                    heavy_lvl=pc
+                if pc > 0 and l < near_dst or (l == near_dst and pc > near_lvl):
+                    near_pos=(wh+tx*xxx,hh+ty*yyy)
+                    near_dst=l
+                    near_lvl=pc
+if near_lvl>0:
+    near_dst_meters=near_dst*mpp
+    heavy_dst_meters=heavy_dst*mpp
+    if near_dst <= rain_detect_pxls:
+        print( f'レベル{near_lvl}の降水中です')
+        if near_lvl<heavy_lvl:
+            print( f'距離{heavy_dst_meters/1000:.1f}kmに{amount_by_level[heavy_lvl]}の降水があります')
+    elif near_dst <= rain_coming_pxls:
+        print( f'距離{near_dst_meters/1000:.1f}kmに{amount_by_level[near_lvl]}の降水があります')
+        if near_lvl<heavy_lvl:
+            print( f'距離{heavy_dst_meters/1000:.1f}kmに{amount_by_level[heavy_lvl]}の降水があります')
 
 dt_valid_utc=datetime.datetime.strptime(nowc_validtime, '%Y%m%d%H%M%S').replace(tzinfo=datetime.timezone.utc)
 dt_valid_jst=dt_valid_utc.astimezone(datetime.timezone(datetime.timedelta(hours=9)))
@@ -632,7 +810,7 @@ img_mimetype_out='image/png'
 upload_fname=f'nowcast_rain_{dt_valid_jst_slack_fname}.png'
 
 buf_img_up=BytesIO()
-img_up=img_composite.save(buf_img_up, format='PNG')
+img_up=rain_composite.save(buf_img_up, format='PNG')
 buf_img_up.seek(0)
 bytes_img_up=buf_img_up.read()
 
@@ -645,27 +823,63 @@ uploaded_files=send_slack_images(
     ['雨雲レーダー'],
     ['降雨エリア・強さが示されている地図画像'],
 )
-slack_blocks=[{
-    "type": "image",
-    "slack_file": {'id': fid},
-    "alt_text":'雨雲レーダー',
-} for (fid, furl) in uploaded_files]
-slack_blocks.insert(0, {
+slack_blocks:List[Dict[str,any]] = list()
+slack_blocks.append({
+    "type": "section",
+    "text": {
+        "type": "plain_text",
+        "text": dt_valid_jst_slack,
+        "emoji": True
+    }
+})
+
+def get_8_direction(origin_x, origin_y, target_x, target_y):
+    dx = target_x - origin_x
+    dy = -(origin_y - target_y) #座標軸が南が正のため
+    angle_rad = math.atan2(dy, dx)
+    angle_deg = (math.degrees(angle_rad) + 360) % 360
+    directions = ['東', '北東', '北', '北西', '西', '南西', '南', '南東']
+    index = int(((angle_deg + 22.5) % 360) // 45)
+    return directions[index]
+
+if near_lvl>0:
+    near_dst_meters=near_dst*mpp
+    heavy_dst_meters=heavy_dst*mpp
+    near_dir=get_8_direction(wh, hh, near_pos[0], near_pos[1])
+    heavy_dir=get_8_direction(wh, hh, heavy_pos[0], heavy_pos[1])
+    
+    rainy_strs:List[str] = list()
+    if near_dst <= rain_detect_pxls:
+        rainy_strs.append(f'付近は{amount_by_level[near_lvl]}の降水中')
+        if near_lvl<heavy_lvl:
+            print( f'{heavy_dir} {heavy_dst_meters/1000:.1f}kmに{amount_by_level[heavy_lvl]}の降水')
+    elif near_dst <= rain_coming_pxls:
+        rainy_strs.append(f'{near_dir} {near_dst_meters/1000:.1f}kmに最大{amount_by_level[near_lvl]}の降水')
+        if near_lvl<heavy_lvl:
+            rainy_strs.append( f'{heavy_dir} {heavy_dst_meters/1000:.1f}kmに最大{amount_by_level[heavy_lvl]}の降水')
+    if len(rainy_strs)>0:
+        slack_blocks.append({
             "type": "section",
             "text": {
                 "type": "plain_text",
-                "text": dt_valid_jst_slack,
+                "text": '\n'.join(rainy_strs),
                 "emoji": True
             }
         })
+        
+slack_blocks.extend([{
+    "type": "image",
+    "slack_file": {'id': fid},
+    "alt_text":'雨雲レーダー',
+} for (fid, furl) in uploaded_files])
 slack_header='ナウキャスト 雨雲レーダー'
 slack_footer={
-        "type": "section",
-        "text": {
-            "type": "mrkdwn",
-            "text": f'source: <https://www.jma.go.jp/bosai/nowc/ | 気象庁ナウキャスト >',
-        }
+    "type": "section",
+    "text": {
+        "type": "mrkdwn",
+        "text": f'source: <https://www.jma.go.jp/bosai/nowc/ | 気象庁ナウキャスト >',
     }
+}
 slack_text=dt_valid_jst_slack
 slack_meta={
     'basetime':f'{nowc_basetime}',
@@ -682,4 +896,3 @@ for fid, furl in uploaded_files:
         time.sleep(waittime)
         # waittime=waittime*2
 post_ts=send_slack(slack_text, slack_blocks, slack_header, slack_footer, slack_meta_event_type_nowc, slack_meta, 10)
-# delete_slack_same_titles(post_ts=post_ts, event_type=slack_meta_event_type_nowc, check_limit=10)
