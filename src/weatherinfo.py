@@ -193,15 +193,17 @@ def send_slack(
     if footer is not None:
         if isinstance(footer, str):
             blocks_fix.append({
-                "type": "section",
-                "text": {
-                    "type": "plain_text",
+                "type": "context",
+                "elements": [{
+                    "type": "mrkdwn",
                     "text": footer,
-                    "emoji": True
-                }
+                }]
             })
         elif isinstance(footer, dict):
-            blocks_fix.append(footer)
+            blocks_fix.append({
+                "type": "context",
+                "elements": [footer]
+            })
         else:
             raise ValueError(f'invalid footer type: {type(footer)}')
     try:
@@ -399,11 +401,8 @@ def proc_main(fcst_json:Dict[str,any], vpfd_json:Dict[str,any])->None:
     vpfd_texts.extend(format_vpfd(vpfd_select_data))
     vpfd_slack = '\n'.join(vpfd_texts)
     vpfd_footer_slack={
-        "type": "section",
-        "text": {
-            "type": "mrkdwn",
-            "text": f'source <{vpfd_link_url} | {vpfd_link_text} >',
-        }
+        "type": "mrkdwn",
+        "text": f'source: <{vpfd_link_url} | {vpfd_link_text} >',
     }
     vpfd_meta={
         'fcst_reportDatetime':fcst_rep_dt_raw,
@@ -874,11 +873,8 @@ slack_blocks.extend([{
 } for (fid, furl) in uploaded_files])
 slack_header='ナウキャスト 雨雲レーダー'
 slack_footer={
-    "type": "section",
-    "text": {
-        "type": "mrkdwn",
-        "text": f'source: <https://www.jma.go.jp/bosai/nowc/ | 気象庁ナウキャスト >',
-    }
+    "type": "mrkdwn",
+    "text": f'source: <https://www.jma.go.jp/bosai/nowc/ | 気象庁ナウキャスト >',
 }
 slack_text=dt_valid_jst_slack
 slack_meta={

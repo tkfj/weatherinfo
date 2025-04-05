@@ -21,10 +21,8 @@ services:
       #   source:  node_modules
       #   target: /usr/src/app/node_modules
 
-    # # ポートの公開例(不要なら削除)
-    # ports:
-    #   - "3000:3000"
-
-    # devcontainer.jsonで"remoteUser"をdevuserにしている場合は
-    # ここの user: は設定しなくても良い場合があります。
+      - shared-data:/app/shared
     user: "devuser"
+volumes:
+  shared-data:
+    name: shared-data
