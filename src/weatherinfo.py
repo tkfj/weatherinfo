@@ -823,14 +823,14 @@ uploaded_files=send_slack_images(
     ['降雨エリア・強さが示されている地図画像'],
 )
 slack_blocks:List[Dict[str,any]] = list()
-slack_blocks.append({
-    "type": "section",
-    "text": {
-        "type": "plain_text",
-        "text": dt_valid_jst_slack,
-        "emoji": True
-    }
-})
+# slack_blocks.append({
+#     "type": "section",
+#     "text": {
+#         "type": "plain_text",
+#         "text": dt_valid_jst_slack,
+#         "emoji": True
+#     }
+# })
 
 def get_8_direction(origin_x, origin_y, target_x, target_y):
     dx = target_x - origin_x
@@ -871,10 +871,10 @@ slack_blocks.extend([{
     "slack_file": {'id': fid},
     "alt_text":'雨雲レーダー',
 } for (fid, furl) in uploaded_files])
-slack_header='ナウキャスト 雨雲レーダー'
+slack_header=None
 slack_footer={
     "type": "mrkdwn",
-    "text": f'source: <https://www.jma.go.jp/bosai/nowc/ | 気象庁ナウキャスト >',
+    "text": f'source: <https://www.jma.go.jp/bosai/nowc/ | 気象庁ナウキャスト > *{dt_valid_jst_slack}*',
 }
 slack_text=dt_valid_jst_slack
 slack_meta={
