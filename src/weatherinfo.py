@@ -834,7 +834,7 @@ slack_blocks:List[Dict[str,any]] = list()
 
 def get_8_direction(origin_x, origin_y, target_x, target_y):
     dx = target_x - origin_x
-    dy = -(origin_y - target_y) #座標軸が南が正のため
+    dy = -(target_y - origin_y) #座標軸が南が正のため
     angle_rad = math.atan2(dy, dx)
     angle_deg = (math.degrees(angle_rad) + 360) % 360
     directions = ['東', '北東', '北', '北西', '西', '南西', '南', '南東']
