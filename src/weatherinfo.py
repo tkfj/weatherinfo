@@ -793,7 +793,7 @@ if near_lvl>0:
     near_dst_meters=near_dst*mpp
     heavy_dst_meters=heavy_dst*mpp
     if near_dst <= rain_detect_pxls:
-        print( f'{amount_by_level[heavy_lvl]}[レベル{near_lvl}]の降水中です')
+        print( f'{amount_by_level[near_lvl]}[レベル{near_lvl}]の降水中です')
         if near_lvl<heavy_lvl:
             print( f'距離{heavy_dst_meters/1000:.1f}kmに{amount_by_level[heavy_lvl]}[レベル{heavy_lvl}]の降水があります')
     elif near_dst <= rain_coming_pxls:
@@ -850,11 +850,11 @@ if near_lvl>0:
     
     rainy_strs:List[str] = list()
     if near_dst <= rain_detect_pxls:
-        rainy_strs.append(f'付近は{amount_by_level[near_lvl]}の降水中')
+        rainy_strs.append(f'付近は{amount_by_level[near_lvl]}の降水')
         if near_lvl<heavy_lvl:
             rainy_strs.append( f'{heavy_dir} {heavy_dst_meters/1000:.1f}kmに{amount_by_level[heavy_lvl]}の降水')
     elif near_dst <= rain_coming_pxls:
-        rainy_strs.append(f'{near_dir} {near_dst_meters/1000:.1f}kmに最大{amount_by_level[near_lvl]}の降水')
+        rainy_strs.append(f'{near_dir} {near_dst_meters/1000:.1f}kmに{amount_by_level[near_lvl]}の降水')
         if near_lvl<heavy_lvl:
             rainy_strs.append( f'{heavy_dir} {heavy_dst_meters/1000:.1f}kmに最大{amount_by_level[heavy_lvl]}の降水')
     if len(rainy_strs)>0:
