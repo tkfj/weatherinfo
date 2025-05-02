@@ -788,17 +788,18 @@ for ty in range(0, wh):
                     near_pos=(wh+tx*xxx,hh+ty*yyy)
                     near_dst=l
                     near_lvl=pc
+
 if near_lvl>0:
     near_dst_meters=near_dst*mpp
     heavy_dst_meters=heavy_dst*mpp
     if near_dst <= rain_detect_pxls:
-        print( f'レベル{near_lvl}の降水中です')
+        print( f'{amount_by_level[heavy_lvl]}[レベル{near_lvl}]の降水中です')
         if near_lvl<heavy_lvl:
-            print( f'距離{heavy_dst_meters/1000:.1f}kmに{amount_by_level[heavy_lvl]}の降水があります')
+            print( f'距離{heavy_dst_meters/1000:.1f}kmに{amount_by_level[heavy_lvl]}[レベル{heavy_lvl}]の降水があります')
     elif near_dst <= rain_coming_pxls:
-        print( f'距離{near_dst_meters/1000:.1f}kmに{amount_by_level[near_lvl]}の降水があります')
+        print( f'距離{near_dst_meters/1000:.1f}kmに{amount_by_level[near_lvl]}[レベル{near_lvl}]の降水があります')
         if near_lvl<heavy_lvl:
-            print( f'距離{heavy_dst_meters/1000:.1f}kmに{amount_by_level[heavy_lvl]}の降水があります')
+            print( f'距離{heavy_dst_meters/1000:.1f}kmに{amount_by_level[heavy_lvl]}[レベル{heavy_lvl}]の降水があります')
 
 dt_valid_utc=datetime.datetime.strptime(nowc_validtime, '%Y%m%d%H%M%S').replace(tzinfo=datetime.timezone.utc)
 dt_valid_jst=dt_valid_utc.astimezone(datetime.timezone(datetime.timedelta(hours=9)))
@@ -851,7 +852,7 @@ if near_lvl>0:
     if near_dst <= rain_detect_pxls:
         rainy_strs.append(f'付近は{amount_by_level[near_lvl]}の降水中')
         if near_lvl<heavy_lvl:
-            print( f'{heavy_dir} {heavy_dst_meters/1000:.1f}kmに{amount_by_level[heavy_lvl]}の降水')
+            rainy_strs.append( f'{heavy_dir} {heavy_dst_meters/1000:.1f}kmに{amount_by_level[heavy_lvl]}の降水')
     elif near_dst <= rain_coming_pxls:
         rainy_strs.append(f'{near_dir} {near_dst_meters/1000:.1f}kmに最大{amount_by_level[near_lvl]}の降水')
         if near_lvl<heavy_lvl:
